@@ -90,13 +90,16 @@ class RegressionModel(base.LikelihoodModel):
 
     Intended for subclassing.
     """
-    def __init__(self, endog, exog, **kwargs):
-        super(RegressionModel, self).__init__(endog, exog, **kwargs)
+    def __init__(self, endog, exog, offset=None, **kwargs):
+        super(RegressionModel, self).__init__(endog, exog, offset=offset, **kwargs)
         self._data_attr.extend(['pinv_wexog', 'wendog', 'wexog', 'weights'])
 
     def initialize(self):
         self.wexog = self.whiten(self.exog)
-        self.wendog = self.whiten(self.endog)
+        if self.offset is not None:
+            self.wendog = self.whiten(self.endog - self.offset)
+        else:
+            self.wendog = self.whiten(self.endog)
         # overwrite nobs from class Model:
         self.nobs = float(self.wexog.shape[0])
 
@@ -140,6 +143,58 @@ class RegressionModel(base.LikelihoodModel):
 
     def whiten(self, X):
         raise NotImplementedError("Subclasses should implement.")
+
+
+    def score(self, params):
+        """
+        Returns the score function evaluated at a given parameter
+        value.
+
+        Parameters
+        ----------
+        params : array-like
+            The parameter vector at which the score function is
+            computed.
+
+        Returns
+        -------
+        The score vector.
+        """
+
+        # Compute these once and cache them.
+        if not hasattr(self, "_wexog_xprod"):
+            self._wexog_xprod = np.dot(self.wexog.T, self.wexog)
+            self._wexog_x_wendog = np.dot(self.wexog.T, self.wendog)
+
+        score = self._wexog_x_wendog.copy()
+        score -= np.dot(self._wexog_xprod, params)
+        return score
+
+
+    def hessian(self, params):
+        """
+        Returns the Hessian function evaluated at a given parameter
+        value.
+
+        Parameters
+        ----------
+        params : array-like
+            The parameter vector at which the Hessian function is
+            computed.
+
+        Returns
+        -------
+        The Hessian matrix.
+        """
+
+        # Compute these once and cache them.
+        if not hasattr(self, "_wexog_xprod"):
+            self._wexog_xprod = np.dot(self.wexog.T, self.wexog)
+            self._wexog_x_wendog = np.dot(self.wexog.T, self.wendog)
+
+        hess = -self._wexog_xprod.copy()
+        return hess
+
 
     def fit(self, method="pinv", cov_type='nonrobust', cov_kwds=None,
             use_t=None, **kwargs):
@@ -582,8 +637,8 @@ class WLS(RegressionModel):
     """ % {'params' : base._model_params_doc,
            'extra_params' : base._missing_param_doc + base._extra_param_doc}
 
-    def __init__(self, endog, exog, weights=1., missing='none', hasconst=None,
-                 **kwargs):
+    def __init__(self, endog, exog, offset=None, weights=1.,
+                 missing='none', hasconst=None, **kwargs):
         weights = np.array(weights)
         if weights.shape == ():
             if (missing == 'drop' and 'missing_idx' in kwargs and
@@ -597,8 +652,11 @@ class WLS(RegressionModel):
             weights = np.array([weights.squeeze()])
         else:
             weights = weights.squeeze()
-        super(WLS, self).__init__(endog, exog, missing=missing,
-                                  weights=weights, hasconst=hasconst, **kwargs)
+
+        super(WLS, self).__init__(endog, exog, offset=offset,
+                                  missing=missing, weights=weights,
+                                  hasconst=hasconst, **kwargs)
+
         nobs = self.exog.shape[0]
         weights = self.weights
         # Experimental normalization of weights
@@ -700,9 +758,10 @@ class OLS(WLS):
     """ % {'params' : base._model_params_doc,
            'extra_params' : base._missing_param_doc + base._extra_param_doc}
     #TODO: change example to use datasets.  This was the point of datasets!
-    def __init__(self, endog, exog=None, missing='none', hasconst=None,
-                 **kwargs):
-        super(OLS, self).__init__(endog, exog, missing=missing,
+
+    def __init__(self, endog, exog=None, offset=None, missing='none',
+                 hasconst=None, **kwargs):
+        super(OLS, self).__init__(endog, exog, offset, missing=missing,
                                   hasconst=hasconst, **kwargs)
         if "weights" in self._init_keys:
             self._init_keys.remove("weights")

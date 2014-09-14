@@ -475,7 +475,8 @@ class LikelihoodModel(Model):
 
     def fit_regularized(self, method="coord_descent", maxiter=100,
                         alpha=0., L1_wt=1., start_params=None,
-                        cnvrg_tol=1e-7, zero_tol=1e-8, **kwargs):
+                        cnvrg_tol=1e-7, zero_tol=1e-8,
+                        return_object=False, **kwargs):
         """
         Return a regularized fit to a regression model.
 
@@ -504,6 +505,8 @@ class LikelihoodModel(Model):
         zero_tol : scalar
             Any estimated coefficient smaller than this value is
             replaced with zero.
+        return_object : bool
+            If False, only the parameter estimates are returned.
 
         Returns
         -------
@@ -530,11 +533,8 @@ class LikelihoodModel(Model):
 
         This is a generic implementation that may be reimplemented in
         specific models for better performance.
-
-        Post-estimation results are based on the same data used to
-        select variables, hence may be subject to overfitting biases.
         """
-
+        print "A"
         k_exog = self.exog.shape[1]
         n_exog = self.exog.shape[0]
 
@@ -547,10 +547,7 @@ class LikelihoodModel(Model):
         else:
             params = start_params.copy()
 
-        # Create a model instance for optimizing a single variable
-        model_1var = copy.deepcopy(self)
-
-        # All the negative penalized loglikeihood functions.
+        # All the negative penalized log-likelihood functions.
         def gen_npfuncs(k):
             def nploglike(params):
                 pen = alpha[k]*((1 - L1_wt)*params**2/2 + L1_wt*np.abs(params))
@@ -579,18 +576,21 @@ class LikelihoodModel(Model):
                 if params_zero[k]:
                     continue
 
-                # Set exog to include only the variable whose effect
-                # is being estimated.
-                model_1var.exog = exog[:,k]
-
                 # Set the offset to account for the variables that are
-                # being held fixed.
+                # being held fixed in the current coordinate
+                # optimization.
                 params0 = params.copy()
                 params0[k] = 0
-                v = np.dot(self.surv.exog_s[stx], params0)
-                model_1var.offset = self.offset + v
+                offset = np.dot(self.exog, params0)
+                if hasattr(self, "offset") and self.offset is not None:
+                    offset += self.offset
 
-                params[k] = _opt_1d(nploglike_funcs[k], params[k],
+                # Create a one-variable model for optimization.
+                model_1var = self.__class__(self.endog, self.exog[:, k],
+                                            offset=offset)
+
+                func, grad, hess = tuple(nploglike_funcs[k])
+                params[k] = _opt_1d(func, grad, hess, params[k],
                                     alpha[k]*L1_wt, tol=btol)
 
                 # Update the active set
@@ -607,23 +607,84 @@ class LikelihoodModel(Model):
         # Set approximate zero coefficients to be exactly zero
         params *= np.abs(params) >= zero_tol
 
+        if not return_object:
+            return params
+
         # Fit the reduced model to get standard errors and other
         # post-estimation results.
         ii = np.flatnonzero(params)
         cov = np.zeros((k_exog, k_exog), dtype=np.float64)
         if len(ii) > 0:
             model = self.__class__(self.endog, self.exog[:, ii],
-                                   status=self.status, entry=self.entry,
-                                   strata=self.strata, offset=self.offset,
-                                   ties=self.ties, missing=self.missing)
+                                   **kwargs)
+            rslt = model.fit()
+            cov[np.ix_(ii, ii)] = rslt.normalized_cov_params
+        else:
+            model = self.__class__(self.endog, self.exog[:, 0],
+                                   **kwargs)
             rslt = model.fit()
             cov[np.ix_(ii, ii)] = rslt.normalized_cov_params
 
-        rfit = rslt.__class__(self, params, cov_params=cov)
+        # fit may return a results or a results wrapper
+        if issubclass(rslt.__class__, wrap.ResultsWrapper):
+            klass = rslt._results.__class__
+        else:
+            klass = rslt.__class__
+        rfit = klass(self, params, cov)
         rfit.regularized = True
 
-        return rfit
 
+def _opt_1d(func, grad, hess, start, L1_wt, tol):
+    """
+    Optimize a L1-penalized smooth one-dimensional function of a
+    single variable.
+
+    Parameters:
+    -----------
+    func : function
+        A smooth function of a single variable to be optimized
+        with L1 penaty.
+    grad : function
+        The gradient of `func`.
+    hess : function
+        The Hessian of `func`.
+    start : real
+        A starting value for the function argument
+    L1_wt : non-negative real
+        The weight for the L1 penalty function.
+    tol : non-negative real
+        A convergence threshold.
+
+    Returns:
+    --------
+    The argmin of the objective function.
+    """
+
+    # TODO: can we detect failures without calling func twice?
+
+    from scipy.optimize import brent
+
+    x = start
+    f = func(x)
+    b = grad(x)
+    c = hess(x)
+    d = b - c*x
+
+    if L1_wt > np.abs(d):
+        return 0.
+    elif d >= 0:
+        x += (L1_wt - b) / c
+    elif d < 0:
+        x -= (L1_wt + b) / c
+
+    f1 = func(x)
+
+    # This is an expensive fall-back if the quadratic
+    # approximation is poor and sends us far off-course.
+    if f1 > f + 1e-10:
+        return brent(func, brack=(x-0.2, x+0.2), tol=tol)
+
+    return x
 
 #TODO: the below is unfinished
 class GenericLikelihoodModel(LikelihoodModel):
