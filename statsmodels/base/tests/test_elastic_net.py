@@ -3,8 +3,8 @@ sys.path.insert(0, "/afs/umich.edu/user/k/s/kshedden/fork4/statsmodels")
 
 import numpy as np
 from statsmodels.regression.linear_model import OLS
-
-
+from statsmodels.genmod.generalized_linear_model import GLM
+from statsmodels.genmod.families import family
 
 def test_linear_model():
 
@@ -19,8 +19,13 @@ def test_linear_model():
     params1 = mod1.fit_regularized(alpha=0, return_object=False)
 
     mod2 = OLS(endog, exog)
-    rslt2 = super(OLS, mod2).fit_regularized(alpha=0)
+    params2 = mod2.fit_regularized(alpha=0.2, return_object=False)
 
-    f1 = mod1.fit_regularized
-    f2 = super(OLS, mod2).fit_regularized
+    #e_endog = np.dot(exog, np.r_[0, 1, 0, -2, 0])
+    #e_endog = 1 / (1 + np.exp(-e_endog))
+    #endog = 1*(np.random.uniform(size=n) < e_endog)
+
+    #bi = family.Binomial()
+    #mod1 = GLM(endog, exog, family=bi)
+    #params1 = mod1.fit_regularized()
     1/0
