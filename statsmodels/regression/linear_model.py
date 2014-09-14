@@ -766,6 +766,9 @@ class OLS(WLS):
         if "weights" in self._init_keys:
             self._init_keys.remove("weights")
 
+        if "weights" in self._init_keys:
+            self._init_keys.remove('weights')
+
     def loglike(self, params):
         """
         The likelihood function for the clasical OLS model.
