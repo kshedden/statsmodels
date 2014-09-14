@@ -534,7 +534,7 @@ class LikelihoodModel(Model):
         This is a generic implementation that may be reimplemented in
         specific models for better performance.
         """
-        print "A"
+
         k_exog = self.exog.shape[1]
         n_exog = self.exog.shape[0]
 
@@ -565,6 +565,9 @@ class LikelihoodModel(Model):
         btol = 1e-8
         params_zero = np.zeros(len(params), dtype=bool)
 
+        init_args = {k : getattr(self, k) for k in self._init_keys
+                     if k != "offset" and hasattr(self, k)}
+
         for itr in range(maxiter):
 
             # Sweep through the parameters
@@ -586,8 +589,8 @@ class LikelihoodModel(Model):
                     offset += self.offset
 
                 # Create a one-variable model for optimization.
-                model_1var = self.__class__(self.endog, self.exog[:, k],
-                                            offset=offset)
+                model_1var = self.__class__(self.endog, self.exog[:, k], offset=offset,
+                                            **init_args)
 
                 func, grad, hess = tuple(nploglike_funcs[k])
                 params[k] = _opt_1d(func, grad, hess, params[k],
