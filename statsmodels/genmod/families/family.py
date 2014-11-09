@@ -211,7 +211,7 @@ class Family(object):
         """
         return self.link(mu)
 
-    def loglike(self, endog, mu, scale=1.):
+    def loglike(self, endog, mu, scale=1., fweights=None):
         """
         The loglikelihood function.
 
@@ -221,6 +221,8 @@ class Family(object):
             Usually the endogenous response variable.
         `mu` : array
             Usually but not always the fitted mean response variable.
+        fweights : array
+            Frequency weights.
 
         Returns
         -------
@@ -347,7 +349,7 @@ class Poisson(Family):
         endog_mu = self._clean(endog/mu)
         return 2*np.sum(endog*np.log(endog_mu))/scale
 
-    def loglike(self, endog, mu, scale=1.):
+    def loglike(self, endog, mu, scale=1., fweights=None):
         """
         Loglikelihood function for Poisson exponential family distribution.
 
@@ -359,6 +361,8 @@ class Poisson(Family):
             Fitted mean response variable
         scale : float, optional
             The default is 1.
+        fweights : array-like
+            Frequency weights
 
         Returns
         -------
@@ -371,7 +375,12 @@ class Poisson(Family):
         llf = scale * sum(-mu + endog*log(mu) - gammaln(endog+1))
         where gammaln is the log gamma function
         """
-        return scale * np.sum(-mu + endog*np.log(mu)-special.gammaln(endog+1))
+        endog1 = endog + 1
+        case_likevals = np.sum(-mu + endog*np.log(mu) - special.gammaln(endog1))
+        if fweights is None:
+            return scale * np.sum(case_likevals)
+        else:
+            return scale * np.sum(fweights * case_likevals)
 
     def resid_anscombe(self, endog, mu):
         """
@@ -481,7 +490,7 @@ class Gaussian(Family):
         """
         return np.sum((endog-mu)**2)/scale
 
-    def loglike(self, endog, mu, scale=1.):
+    def loglike(self, endog, mu, scale=1., fweights=None):
         """
         Loglikelihood function for Gaussian exponential family distribution.
 
@@ -493,6 +502,8 @@ class Gaussian(Family):
             Fitted mean response variable
         scale : float, optional
             Scales the loglikelihood function. The default is 1.
+        fweights : array-like
+            Frequency weights
 
         Returns
         -------
@@ -507,22 +518,35 @@ class Gaussian(Family):
         llf = -(nobs/2)*(log(SSR) + (1 + log(2*pi/nobs)))
         where SSR = sum((endog-link^(-1)(mu))**2)
 
-        If the links is not the identity link then the loglikelihood
+        If the link is not the identity link then the loglikelihood
         function is defined as
         llf = sum((`endog`*`mu`-`mu`**2/2)/`scale` - `endog`**2/(2*`scale`) - \
             (1/2.)*log(2*pi*`scale`))
         """
         if isinstance(self.link, L.Power) and self.link.power == 1:
-            # This is just the loglikelihood for classical OLS
-            nobs2 = endog.shape[0]/2.
-            SSR = ss(endog-self.fitted(mu))
-            llf = -np.log(SSR) * nobs2
-            llf -= (1+np.log(np.pi/nobs2))*nobs2
+            resid = endog - self.fitted(mu)
+            nobs2 = endog.shape[0] / 2.
+            if fweights is None:
+                # This is just the loglikelihood for classical OLS
+                SSR = ss(resid)
+                llf = -np.log(SSR) * nobs2
+                llf -= (1 + np.log(np.pi / nobs2)) * nobs2
+            else:
+                wsum = np.sum(fweights)
+                WSSR = ss(fweights * resid)
+                llf = -wsum * np.log(WSSR) / 2
+                llf -= wsum * (1 + np.log(2 * np.pi / wsum)) / 2
             return llf
         else:
             # Return the loglikelihood for Gaussian GLM
-            return np.sum((endog * mu - mu**2/2)/scale - endog**2/(2 * scale)
-                          - .5*np.log(2 * np.pi * scale))
+            case_likevals = endog * mu - mu**2 / 2
+            case_likevals -= endog**2 / 2
+            case_likevals /= scale
+            case_likevals -= .5 * np.log(2 * np.pi * scale)
+            if fweights is None:
+                return np.sum(case_likevals)
+            else:
+                return np.sum(fweights * case_likevals)
 
     def resid_anscombe(self, endog, mu):
         """
@@ -646,7 +670,7 @@ class Gamma(Family):
         return np.sign(endog - mu) * np.sqrt(-2 * (-(endog - mu)/mu +
                                                    np.log(endog_mu)))
 
-    def loglike(self, endog, mu, scale=1.):
+    def loglike(self, endog, mu, scale=1., fweights=None):
         """
         Loglikelihood function for Gamma exponential family distribution.
 
@@ -658,6 +682,8 @@ class Gamma(Family):
             Fitted mean response variable
         scale : float, optional
             The default is 1.
+        fweights : array-like
+            Frequency weights
 
         Returns
         -------
@@ -671,9 +697,13 @@ class Gamma(Family):
               log(scale) + scale*gammaln(1/scale))
         where gammaln is the log gamma function.
         """
-        return - 1./scale * np.sum(endog/mu + np.log(mu) + (scale - 1) *
-                                   np.log(endog) + np.log(scale) + scale *
-                                   special.gammaln(1./scale))
+        case_likevals = endog/mu + np.log(mu)
+        case_likevals += (scale - 1) * np.log(endog) + np.log(scale)
+        case_likevals += scale * special.gammaln(1. / scale)
+        if fweights is None:
+            return -np.sum(case_likevals) / scale
+        else:
+            return -np.sum(fweights * case_likevals) / scale
         # in Stata scale is set to equal 1 for reporting llf
         # in R it's the dispersion, though there is a loss of precision vs.
         # our results due to an assumed difference in implementation
@@ -868,7 +898,7 @@ class Binomial(Family):
                             (1 - endog) * np.log((1 - endog)/(1 - mu) +
                                                  1e-200)))/scale)
 
-    def loglike(self, endog, mu, scale=1.):
+    def loglike(self, endog, mu, scale=1., fweights=None):
         """
         Loglikelihood function for Binomial exponential family distribution.
 
@@ -880,6 +910,8 @@ class Binomial(Family):
             Fitted mean response variable
         scale : float, optional
             The default is 1.
+        fweights : array-like
+            Frequency weights
 
         Returns
         -------
@@ -902,15 +934,23 @@ class Binomial(Family):
         """
 
         if np.shape(self.n) == () and self.n == 1:
-            return scale * np.sum(endog * np.log(mu/(1 - mu) + 1e-200) +
-                                  np.log(1 - mu))
+            case_likevals = endog * np.log(mu / (1 - mu) + 1e-200)
+            case_likevals += np.log(1 - mu)
+            if fweights is None:
+                return scale * np.sum(case_likevals)
+            else:
+                return scale * np.sum(fweights * case_likevals)
         else:
             y = endog * self.n  # convert back to successes
-            return scale * np.sum(special.gammaln(self.n + 1) -
-                                  special.gammaln(y + 1) -
-                                  special.gammaln(self.n - y + 1) + y *
-                                  np.log(mu/(1 - mu)) + self.n *
-                                  np.log(1 - mu))
+            case_likevals = special.gammaln(self.n + 1)
+            case_likevals -= special.gammaln(y + 1)
+            case_likevals -= special.gammaln(self.n - y + 1)
+            case_likevals += y * np.log(mu/(1 - mu))
+            case_likevals += self.n * np.log(1 - mu)
+            if fweights is None:
+                return scale * np.sum(case_likevals)
+            else:
+                return scale * np.sum(fweights * case_likevals)
 
     def resid_anscombe(self, endog, mu):
         '''
