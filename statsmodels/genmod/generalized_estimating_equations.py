@@ -1,6 +1,6 @@
 """
-Procedures for fitting marginal regression models to dependent data
-using Generalized Estimating Equations.
+Fit marginal regression models to dependent data using Generalized
+Estimating Equations.
 
 References
 ----------
@@ -208,9 +208,8 @@ _gee_init_doc = """
         If true, the dependence parameters are optimized, otherwise
         they are held fixed at their starting values.
     weights : array-like
-        An array of weights to use in the analysis.  The weights must
-        be constant within each group.  These correspond to
-        probability weights (pweights) in Stata.
+        An array of weights to use in the analysis.  These correspond
+        to probability weights (pweights) in Stata.
     %(extra_params)s
 
     See Also
@@ -560,8 +559,10 @@ class GEE(base.Model):
 
         if self.weights is not None:
             self.weights_li = self.cluster_list(self.weights)
-            self.weights_li = [x[0] for x in self.weights_li]
-            self.weights_li = np.asarray(self.weights_li)
+            self._has_weights = True
+        else:
+            delattr(self, 'weights')
+            self._has_weights = False
 
         self.num_group = len(self.endog_li)
 
@@ -717,24 +718,23 @@ class GEE(base.Model):
         nobs = self.nobs
         varfunc = self.family.variance
 
-        scale = 0.
-        fsum = 0.
+        scale, wsum = 0., 0.
         for i in range(self.num_group):
 
-            if len(endog[i]) == 0:
-                continue
-
             expval, _ = cached_means[i]
-
-            f = self.weights_li[i] if self.weights is not None else 1.
 
             sdev = np.sqrt(varfunc(expval))
             resid = (endog[i] - expval) / sdev
 
-            scale += f * np.sum(resid ** 2)
-            fsum += f * len(endog[i])
+            if self._has_weights:
+                w = self.weights_li[i]
+                scale += np.sum(w * resid**2)
+                wsum += w.sum()
+            else:
+                scale += np.sum(resid**2)
+                wsum += len(endog[i])
 
-        scale /= (fsum * (nobs - self.ddof_scale) / float(nobs))
+        scale /= (wsum * (nobs - self.ddof_scale) / float(nobs))
 
         return scale
 
@@ -812,7 +812,7 @@ class GEE(base.Model):
 
         varfunc = self.family.variance
 
-        bmat, score = 0, 0
+        bmat, score = 0., 0.
         for i in range(self.num_group):
 
             expval, lpr = cached_means[i]
@@ -820,16 +820,22 @@ class GEE(base.Model):
             dmat = self.mean_deriv(exog[i], lpr)
             sdev = np.sqrt(varfunc(expval))
 
+            if self._has_weights:
+                w = self.weights_li[i]
+                wdmat = w[:, None] * dmat
+                resid *= w
+            else:
+                wdmat = dmat
+
             rslt = self.cov_struct.covariance_matrix_solve(expval, i,
-                                                           sdev, (dmat, resid))
+                                                sdev, (wdmat, resid))
+
             if rslt is None:
                 return None, None
             vinv_d, vinv_resid = tuple(rslt)
 
-            f = self.weights_li[i] if self.weights is not None else 1.
-
-            bmat += f * np.dot(dmat.T, vinv_d)
-            score += f * np.dot(dmat.T, vinv_resid)
+            bmat += np.dot(dmat.T, vinv_d)
+            score += np.dot(dmat.T, vinv_resid)
 
         update = np.linalg.solve(bmat, score)
 
@@ -901,16 +907,21 @@ class GEE(base.Model):
             dmat = self.mean_deriv(exog[i], lpr)
             sdev = np.sqrt(varfunc(expval))
 
-            rslt = self.cov_struct.covariance_matrix_solve(
-                expval, i, sdev, (dmat, resid))
+            if self._has_weights:
+                w = self.weights_li[i]
+                wdmat = w[:, None] * dmat
+                resid = w * resid
+            else:
+                wdmat = dmat
+
+            rslt = self.cov_struct.covariance_matrix_solve(expval, i,
+                                                sdev, (wdmat, resid))
             if rslt is None:
                 return None, None, None, None
             vinv_d, vinv_resid = tuple(rslt)
 
-            f = self.weights_li[i] if self.weights is not None else 1.
-
-            bmat += f * np.dot(dmat.T, vinv_d)
-            dvinv_resid = f * np.dot(dmat.T, vinv_resid)
+            bmat += np.dot(dmat.T, vinv_d)
+            dvinv_resid = np.dot(dmat.T, vinv_resid)
             cmat += np.outer(dvinv_resid, dvinv_resid)
 
         scale = self.estimate_scale()
@@ -942,8 +953,15 @@ class GEE(base.Model):
             dmat = self.mean_deriv(exog[i], lpr)
             sdev = np.sqrt(varfunc(expval))
 
-            rslt = self.cov_struct.covariance_matrix_solve(
-                expval, i, sdev, (dmat,))
+            if self._has_weights:
+                w = self.weights_li[i]
+                wdmat = w[:, None] * dmat
+                resid = w * resid
+            else:
+                wdmat = dmat
+
+            rslt = self.cov_struct.covariance_matrix_solve(expval,
+                                                  i, sdev, (wdmat,))
             if rslt is None:
                 return None
             vinv_d = rslt[0]
@@ -952,15 +970,13 @@ class GEE(base.Model):
             hmat = np.dot(vinv_d, cov_naive)
             hmat = np.dot(hmat, dmat.T).T
 
-            f = self.weights_li[i] if self.weights is not None else 1.
-
             aresid = np.linalg.solve(np.eye(len(resid)) - hmat, resid)
             rslt = self.cov_struct.covariance_matrix_solve(
                 expval, i, sdev, (aresid,))
             if rslt is None:
                 return None
             srt = rslt[0]
-            srt = f * np.dot(dmat.T, srt) / scale
+            srt = np.dot(dmat.T, srt) / scale
             bcm += np.outer(srt, srt)
 
         cov_robust_bc = np.dot(cov_naive, np.dot(bcm, cov_naive))
@@ -1082,7 +1098,7 @@ class GEE(base.Model):
                              'dep_params': [],
                              'cov_adjust': []}
 
-        if self.weights is not None and cov_type == 'naive':
+        if self._has_weights and cov_type == 'naive':
             raise ValueError("when using weights, cov_type may not be naive")
 
         if start_params is None:

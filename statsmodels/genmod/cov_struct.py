@@ -234,8 +234,9 @@ class Exchangeable(CovStruct):
 
         cached_means = self.model.cached_means
 
-        has_weights = self.model.weights is not None
-        weights_li = self.model.weights
+        has_weights = self.model._has_weights
+        if has_weights:
+            weights_li = self.model.weights_li
 
         residsq_sum, scale = 0, 0
         fsum1, fsum2, n_pairs = 0., 0., 0.
@@ -243,16 +244,24 @@ class Exchangeable(CovStruct):
             expval, _ = cached_means[i]
             stdev = np.sqrt(varfunc(expval))
             resid = (endog[i] - expval) / stdev
-            f = weights_li[i] if has_weights else 1.
-
-            ssr = np.sum(resid * resid)
-            scale += f * ssr
-            fsum1 += f * len(endog[i])
-
-            residsq_sum += f * (resid.sum() ** 2 - ssr) / 2
             ngrp = len(resid)
             npr = 0.5 * ngrp * (ngrp - 1)
-            fsum2 += f * npr
+            residsq = np.outer(resid, resid)
+
+            if has_weights:
+                w = weights_li[i]
+                residsq *= np.sqrt(np.outer(w, w))
+                fsum1 += w.sum()
+                nm = np.sqrt(np.outer(w, w))
+                nm = np.tril(nm, -1)
+                fsum2 += nm.sum()
+            else:
+                fsum1 += len(endog[i])
+                fsum2 += npr
+
+            residsq_tri = np.tril(residsq, -1)
+            residsq_sum += residsq_tri.sum()
+            scale += np.trace(residsq)
             n_pairs += npr
 
         ddof = self.model.ddof_scale
@@ -365,10 +374,8 @@ class Nested(CovStruct):
 
         super(Nested, self).initialize(model)
 
-        if self.model.weights is not None:
-            warnings.warn("weights not implemented for nested cov_struct, "
-                          "using unweighted covariance estimate",
-                          NotImplementedWarning)
+        if self.model._has_weights is not None:
+            warnings.warn("weights not implemented for nested cov_struct, using unweighted covariance estimate")
 
         # A bit of processing of the nest data
         id_matrix = np.asarray(self.model.dep_data)
@@ -682,10 +689,8 @@ class Autoregressive(CovStruct):
 
     def update(self, params):
 
-        if self.model.weights is not None:
-            warnings.warn("weights not implemented for autoregressive "
-                          "cov_struct, using unweighted covariance estimate",
-                          NotImplementedWarning)
+        if self.model._has_weights:
+            warnings.warn("weights not implemented for autoregressive cov_struct, using unweighted covariance estimate")
 
         endog = self.model.endog_li
         time = self.model.time_li
@@ -912,10 +917,19 @@ class GlobalOddsRatio(CategoricalCovStruct):
 
         super(GlobalOddsRatio, self).initialize(model)
 
-        if self.model.weights is not None:
-            warnings.warn("weights not implemented for GlobalOddsRatio "
-                          "cov_struct, using unweighted covariance estimate",
-                          NotImplementedWarning)
+        if self.model._has_weights:
+            warnings.warn("weights not implemented for GlobalOddsRatio cov_struct, using unweighted covariance estimate")
+
+        self.nlevel = len(model.endog_values)
+        self.ncut = self.nlevel - 1
+
+        ibd = []
+        for v in model.endog_li:
+            jj = np.arange(0, len(v) + 1, self.ncut)
+            ibd1 = np.hstack((jj[0:-1][:, None], jj[1:][:, None]))
+            ibd1 = [(jj[k], jj[k + 1]) for k in range(len(jj) - 1)]
+            ibd.append(ibd1)
+        self.ibd = ibd
 
         # Need to restrict to between-subject pairs
         cpp = []
