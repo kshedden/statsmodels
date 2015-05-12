@@ -1337,10 +1337,8 @@ class Equivalence(CovStruct):
 
         super(Equivalence, self).initialize(model)
 
-        if self.model.weights is not None:
-            warnings.warn("weights not implemented for equalence cov_struct, "
-                          "using unweighted covariance estimate",
-                          NotImplementedWarning)
+        if self.model._has_weights:
+            warnings.warn("weights not implemented for equivalence cov_struct, using unweighted covariance estimate")
 
         if not hasattr(self, 'pairs'):
             self._pairs_from_labels()

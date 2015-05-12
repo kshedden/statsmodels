@@ -608,7 +608,7 @@ class GEE(base.Model):
     @classmethod
     def from_formula(cls, formula, groups, data, subset=None,
                      time=None, offset=None, exposure=None,
-                     *args, **kwargs):
+                     weights=None, *args, **kwargs):
         """
         Create a GEE model instance from a formula and dataframe.
 
@@ -679,10 +679,14 @@ class GEE(base.Model):
         if type(exposure) == str:
             exposure = data[exposure]
 
-        model = super(GEE, cls).from_formula(formula, data=data, subset=subset,
-                                             groups=groups, time=time,
+        if type(weights) == str:
+            weights = data[weights]
+
+        model = super(GEE, cls).from_formula(formula, data, subset,
+                                             groups, time=time,
                                              offset=offset,
                                              exposure=exposure,
+                                             weights=weights,
                                              *args, **kwargs)
 
         return model
