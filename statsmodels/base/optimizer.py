@@ -398,8 +398,8 @@ def _fit_lbfgs(f, score, start_params, fargs, kwargs, disp=True,
 def _fit_nm(f, score, start_params, fargs, kwargs, disp=True,
                 maxiter=100, callback=None, retall=False,
                 full_output=True, hess=None):
-    xtol = kwargs.setdefault('xtol', 0.0001)
-    ftol = kwargs.setdefault('ftol', 0.0001)
+    xtol = kwargs.setdefault('xtol', 1.0000000000000001e-05)
+    ftol = kwargs.setdefault('ftol', 1.4901161193847656e-08)
     maxfun = kwargs.setdefault('maxfun', None)
     retvals = optimize.fmin(f, start_params, args=fargs, xtol=xtol,
                             ftol=ftol, maxiter=maxiter, maxfun=maxfun,

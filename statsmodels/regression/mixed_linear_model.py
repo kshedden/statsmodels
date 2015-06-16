@@ -135,7 +135,6 @@ the Newon-Raphson algorihm cannot be used for model fitting.
 
 import numpy as np
 import statsmodels.base.model as base
-from scipy.optimize import fmin_ncg, fmin_cg, fmin_bfgs, fmin
 from statsmodels.tools.decorators import cache_readonly
 from statsmodels.tools import data as data_tools
 from scipy.stats.distributions import norm
@@ -774,7 +773,7 @@ class MixedLM(base.LikelihoodModel):
         group_name = "Group"
         if type(kwargs["groups"]) == str:
             group_name = kwargs["groups"]
-            kwargs["groups"] = np.asarray(data[kwargs["groups"]])
+            kwargs["groups"] = np.asarray(data[group_name])
 
         if re_formula is not None:
             if re_formula.strip() == "1":
@@ -1485,7 +1484,6 @@ class MixedLM(base.LikelihoodModel):
                 xtvix += np.dot(exog.T, viexog)
 
             # Contributions to the covariance parameter gradient
-            vex = solver(ex_r)
             vir = solver(resid)
             for jj, matl, matr, vsl, vsr, sym in self._gen_dV_dPar(ex_r, solver, group):
                 dlv[jj] = np.sum(matr * vsl) # trace dot
@@ -1585,7 +1583,6 @@ class MixedLM(base.LikelihoodModel):
         score_vc = scr[self.k_fe + self.k_re2:]
 
         return score_fe, score_re, score_vc
-
 
     def hessian(self, params):
         """
@@ -1799,8 +1796,8 @@ class MixedLM(base.LikelihoodModel):
         return qf
 
 
-    def fit(self, start_params=None, reml=True, niter_sa=0,
-            do_cg=True, fe_pen=None, cov_pen=None, free=None,
+    def fit(self, start_params=None, reml=True,
+            fe_pen=None, cov_pen=None, free=None,
             full_output=False, method='bfgs', **kwargs):
         """
         Fit a linear mixed model to the data.
@@ -1858,8 +1855,6 @@ class MixedLM(base.LikelihoodModel):
         else:
             hist = None
 
-        success = False
-
         if start_params is None:
             params = MixedLMParams(self.k_fe, self.k_re, self.k_vc)
             params.fe_params = np.zeros(self.k_fe)
@@ -1873,20 +1868,19 @@ class MixedLM(base.LikelihoodModel):
                                                    self.k_re, self.use_sqrt,
                                                    with_fe=True)
 
-        if do_cg:
-            kwargs["retall"] = hist is not None
-            if "disp" not in kwargs:
-                kwargs["disp"] = False
-            packed = params.get_packed(use_sqrt=self.use_sqrt, with_fe=False)
-            rslt = super(MixedLM, self).fit(start_params=packed,
-                                            skip_hessian=True,
-                                            method=method,
-                                            **kwargs)
+        kwargs["retall"] = hist is not None
+        if "disp" not in kwargs:
+            kwargs["disp"] = False
+        packed = params.get_packed(use_sqrt=self.use_sqrt, with_fe=False)
+        rslt = super(MixedLM, self).fit(start_params=packed,
+                                        skip_hessian=True,
+                                        method=method,
+                                        **kwargs)
 
-            # The optimization succeeded
-            params = np.atleast_1d(rslt.params)
-            if hist is not None:
-                hist.append(rslt.mle_retvals)
+        # The optimization succeeded
+        params = np.atleast_1d(rslt.params)
+        if hist is not None:
+            hist.append(rslt.mle_retvals)
 
         converged = rslt.mle_retvals['converged']
         if not converged:
@@ -2313,7 +2307,7 @@ class MixedLMResults(base.LikelihoodModelResults, base.ResultMixin):
         k_fe = pmodel.k_fe
         k_re = pmodel.k_re
         k_vc = pmodel.k_vc
-        endog, exog, groups = pmodel.endog, pmodel.exog, pmodel.groups
+        endog, exog = pmodel.endog, pmodel.exog
 
         # Need to permute the columns of the random effects design
         # matrix so that the profiled variable is in the first column.
