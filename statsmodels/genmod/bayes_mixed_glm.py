@@ -185,8 +185,13 @@ class _BayesMixedGLM(base.Model):
                  vcp_p=1, fe_p=2, fep_names=None,
                  vcp_names=None, vc_names=None, **kwargs):
 
+        ident = np.asarray(ident)
         if len(ident) != exog_vc.shape[1]:
             msg = "len(ident) should match the number of columns of exog_vc"
+            raise ValueError(msg)
+
+        if np.unique(ident).size != ident.max() + 1:
+            msg = "ident should contain integers 0, 1, 2, ... with no skipped values"
             raise ValueError(msg)
 
         # Get the fixed effects parameter names
@@ -203,7 +208,7 @@ class _BayesMixedGLM(base.Model):
                          for k in range(int(max(ident)) + 1)]
         else:
             if len(vcp_names) != len(set(ident)):
-                msg = "The lengths of vcp_names and ident should be the same"
+                msg = "The length of vcp_names should equal the number of distinct values in ident."
                 raise ValueError(msg)
 
         endog = np.asarray(endog)
@@ -388,11 +393,16 @@ class _BayesMixedGLM(base.Model):
             The prior standard deviation for the fixed effects parameters.
         """
 
+        # Provide a consistent ordering for the terms.
+        names = list(vc_formulas.keys())
+        names.sort()
+
         ident = []
         exog_vc = []
         vcp_names = []
         j = 0
-        for na, fml in vc_formulas.items():
+        for na in names:
+            fml = vc_formulas[na]
             mat = patsy.dmatrix(fml, data, return_type='dataframe')
             exog_vc.append(mat)
             vcp_names.append(na)
@@ -569,7 +579,7 @@ class _VariationalBayesMixedGLM(object):
 
         return mean_grad, sd_grad
 
-    def fit_vb(self, mean=None, sd=None, fit_method="BFGS", minim_opts=None,
+    def fit_vb(self, mean=None, sd=None, method="BFGS", minim_opts=None,
                verbose=False):
         """
         Fit a model using the variational Bayes mean field approximation.
@@ -580,7 +590,7 @@ class _VariationalBayesMixedGLM(object):
             Starting value for VB mean vector
         sd : array-like
             Starting value for VB standard deviation vector
-        fit_method : string
+        method : string
             Algorithm for scipy.minimize
         minim_opts : dict-like
             Options passed to scipy.minimize
@@ -650,7 +660,7 @@ class _VariationalBayesMixedGLM(object):
             return -np.concatenate((gm, gs))
 
         start = np.concatenate((m, s))
-        mm = minimize(elbo, start, jac=elbo_grad, method=fit_method,
+        mm = minimize(elbo, start, jac=elbo_grad, method=method,
                       options=minim_opts)
         if not mm.success:
             warnings.warn("VB fitting did not converge")
