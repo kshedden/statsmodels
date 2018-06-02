@@ -212,12 +212,18 @@ class _BayesMixedGLM(base.Model):
         exog = np.asarray(exog)
         self.orthog = orthog
         if orthog:
+            # Orthogonalize the fixed effects design matrix, and remember
+            # the transform used to inver the transformation.
             u, s, vt = np.linalg.svd(exog, 0)
+            sn = np.sqrt(u.shape[0])
+            u *= sn
+            s /= sn
             self._exog_orig = exog
             ii = np.flatnonzero(s > 1e-8)
+            print(len(ii), len(s))
             exog = u[:, ii]
             v = vt.T
-            self._xform = v[ii, :] / s[ii]
+            self._xform = v[:, ii] / s[ii]
 
         if not sparse.issparse(exog_vc):
             exog_vc = sparse.csr_matrix(exog_vc)
@@ -444,7 +450,11 @@ class _BayesMixedGLM(base.Model):
         def grad(params):
             return -self.logposterior_grad(params)
 
-        start = self._get_start()
+        if minim_opts is not None and "x0" in minim_opts:
+            start = minim_opts["x0"]
+            del minim_opts["x0"]
+        else:
+            start = self._get_start()
 
         r = minimize(fun, start, method=optim_method, jac=grad, options=minim_opts)
         if not r.success:
@@ -742,7 +752,7 @@ class _VariationalBayesMixedGLM(object):
 
         if cov_params.ndim == 1:
             cov_params = np.diag(cov_params)
-        d1 = self.k_fep + self.k_vcp + self.k_vc
+        d1 = len(fe_params) + self.k_vcp + self.k_vc
         d2 = cov_params.shape[0]
         xm = np.zeros((d1, d2))
         xm[0:xform.shape[0], 0:xform.shape[1]] = xform
