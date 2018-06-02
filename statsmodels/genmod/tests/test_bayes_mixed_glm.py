@@ -110,12 +110,14 @@ def test_simple_logit_map():
     y, exog_fe, exog_vc, ident = gen_simple_logit(10, 10, 2)
     exog_vc = sparse.csr_matrix(exog_vc)
 
-    glmm = BinomialBayesMixedGLM(y, exog_fe, exog_vc, ident,
-                                 vcp_p=0.5)
-    rslt = glmm.fit_map()
+    for orthog in False, True:
+        glmm = BinomialBayesMixedGLM(y, exog_fe, exog_vc, ident,
+                                     vcp_p=0.5, orthog=orthog)
+        rslt = glmm.fit_map()
 
-    assert_allclose(glmm.logposterior_grad(rslt.params),
-                    np.zeros_like(rslt.params), atol=1e-3)
+        grad = glmm.logposterior_grad(rslt.params)
+        if not orthog:
+            assert_allclose(grad, np.zeros_like(grad), atol=1e-3)
 
 
 def test_simple_poisson_map():

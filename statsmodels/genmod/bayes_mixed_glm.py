@@ -182,8 +182,8 @@ _poisson_example = """
 class _BayesMixedGLM(base.Model):
 
     def __init__(self, endog, exog, exog_vc=None, ident=None, family=None,
-                 vcp_p=1, fe_p=2, fep_names=None,
-                 vcp_names=None, vc_names=None, **kwargs):
+                 vcp_p=1, fe_p=2, fep_names=None, vcp_names=None,
+                 vc_names=None, orthog=False, **kwargs):
 
         if len(ident) != exog_vc.shape[1]:
             msg = "len(ident) should match the number of columns of exog_vc"
@@ -207,7 +207,17 @@ class _BayesMixedGLM(base.Model):
                 raise ValueError(msg)
 
         endog = np.asarray(endog)
+
+        # Fixed effects regressors
         exog = np.asarray(exog)
+        self.orthog = orthog
+        if orthog:
+            u, s, vt = np.linalg.svd(exog, 0)
+            self._exog_orig = exog
+            ii = np.flatnonzero(s > 1e-8)
+            exog = u[:, ii]
+            v = vt.T
+            self._xform = v[ii, :] / s[ii]
 
         if not sparse.issparse(exog_vc):
             exog_vc = sparse.csr_matrix(exog_vc)
@@ -362,7 +372,7 @@ class _BayesMixedGLM(base.Model):
 
     @classmethod
     def from_formula(cls, formula, vc_formulas, data, family=None,
-                     vcp_p=1, fe_p=2):
+                     vcp_p=1, fe_p=2, orthog=False):
         """
         Fit a BayesMixedGLM using a formula.
 
@@ -406,18 +416,19 @@ class _BayesMixedGLM(base.Model):
         model = super(_BayesMixedGLM, cls).from_formula(
             formula, data=data, family=family, subset=None,
             exog_vc=exog_vc, ident=ident, vc_names=vc_names,
-            vcp_names=vcp_names, fe_p=fe_p, vcp_p=vcp_p)
+            vcp_names=vcp_names, fe_p=fe_p, vcp_p=vcp_p,
+            orthog=orthog)
 
         return model
 
-    def fit_map(self, method="BFGS", minim_opts=None):
+    def fit_map(self, optim_method="BFGS", minim_opts=None):
         """
         Construct the Laplace approximation to the posterior
         distribution.
 
         Parameters
         ----------
-        method : string
+        optim_method : string
             Optimization method for finding the posterior mode.
         minim_opts : dict-like
             Options passed to scipy.minimize.
@@ -435,7 +446,7 @@ class _BayesMixedGLM(base.Model):
 
         start = self._get_start()
 
-        r = minimize(fun, start, method=method, jac=grad, options=minim_opts)
+        r = minimize(fun, start, method=optim_method, jac=grad, options=minim_opts)
         if not r.success:
             msg = ("Laplace fitting did not converge, |gradient|=%.6f" %
                    np.sqrt(np.sum(r.jac**2)))
@@ -443,9 +454,15 @@ class _BayesMixedGLM(base.Model):
 
         from statsmodels.tools.numdiff import approx_fprime
         hess = approx_fprime(r.x, grad)
-        hess_inv = np.linalg.inv(hess)
+        cov_params = np.linalg.inv(hess)
 
-        return BayesMixedGLMResults(self, r.x, hess_inv, optim_retvals=r)
+        params = r.x
+        if self.orthog:
+            params, cov_params = self._reverse_orthog(params, cov_params)
+            self.exog = self._exog_orig
+            self.k_fep = self.exog.shape[1]
+
+        return BayesMixedGLMResults(self, params, cov_params, optim_retvals=r)
 
 
 class _VariationalBayesMixedGLM(object):
@@ -569,7 +586,7 @@ class _VariationalBayesMixedGLM(object):
 
         return mean_grad, sd_grad
 
-    def fit_vb(self, mean=None, sd=None, fit_method="BFGS", minim_opts=None,
+    def fit_vb(self, mean=None, sd=None, optim_method="BFGS", minim_opts=None,
                verbose=False):
         """
         Fit a model using the variational Bayes mean field approximation.
@@ -579,8 +596,9 @@ class _VariationalBayesMixedGLM(object):
         mean : array-like
             Starting value for VB mean vector
         sd : array-like
-            Starting value for VB standard deviation vector
-        fit_method : string
+            Starting vaResu
+            lue for VB standard deviation vector
+        optim_method : string
             Algorithm for scipy.minimize
         minim_opts : dict-like
             Options passed to scipy.minimize
@@ -598,7 +616,9 @@ class _VariationalBayesMixedGLM(object):
 
             E* log p(y, fe, vcp, vc) - E* log q
 
-        where E* is expectation with respect to the product of qj.
+        where E* is expectation with res
+
+        pect to the product of qj.
 
         References
         ----------
@@ -650,13 +670,22 @@ class _VariationalBayesMixedGLM(object):
             return -np.concatenate((gm, gs))
 
         start = np.concatenate((m, s))
-        mm = minimize(elbo, start, jac=elbo_grad, method=fit_method,
+        mm = minimize(elbo, start, jac=elbo_grad, method=optim_method,
                       options=minim_opts)
         if not mm.success:
             warnings.warn("VB fitting did not converge")
 
         n = len(mm.x) // 2
-        return BayesMixedGLMResults(self, mm.x[0:n], np.exp(2*mm.x[n:]), mm)
+
+        params = mm.x[0:n]
+        cov_params = np.exp(2*mm.x[n:])
+
+        if self.orthog:
+            params, cov_params = self._reverse_orthog(params, cov_params)
+            self.exog = self._exog_orig
+            self.k_fep = self.exog.shape[1]
+
+        return BayesMixedGLMResults(self, params, cov_params, mm)
 
     # Handle terms in the ELBO that are common to all models.
     def _elbo_common(self, fep_mean, fep_sd, vcp_mean, vcp_sd, vc_mean, vc_sd):
@@ -703,6 +732,25 @@ class _VariationalBayesMixedGLM(object):
 
         return (fep_mean_grad, fep_sd_grad, vcp_mean_grad, vcp_sd_grad,
                 vc_mean_grad, vc_sd_grad)
+
+    def _reverse_orthog(self, params, cov_params):
+
+        xform = self._xform
+        fe_params = params[0:self.k_fep]
+        fe_params = np.dot(xform, fe_params)
+        params = np.concatenate((fe_params, params[self.k_fep:]))
+
+        if cov_params.ndim == 1:
+            cov_params = np.diag(cov_params)
+        d1 = self.k_fep + self.k_vcp + self.k_vc
+        d2 = cov_params.shape[0]
+        xm = np.zeros((d1, d2))
+        xm[0:xform.shape[0], 0:xform.shape[1]] = xform
+        d = self.k_vcp + self.k_vc
+        xm[-d:, -d:] = np.eye(d)
+        cov_params = np.dot(xm, np.dot(cov_params, xm.T))
+
+        return params, cov_params
 
 
 class BayesMixedGLMResults(object):
@@ -824,27 +872,30 @@ class BinomialBayesMixedGLM(_VariationalBayesMixedGLM, _BayesMixedGLM):
 
     def __init__(self, endog, exog, exog_vc, ident, vcp_p=1,
                  fe_p=2, fep_names=None, vcp_names=None,
-                 vc_names=None):
+                 vc_names=None, orthog=False):
 
         super(BinomialBayesMixedGLM, self).__init__(
             endog, exog, exog_vc=exog_vc,
             ident=ident, vcp_p=vcp_p, fe_p=fe_p,
             family=families.Binomial(),
             fep_names=fep_names, vcp_names=vcp_names,
-            vc_names=vc_names)
+            vc_names=vc_names, orthog=orthog)
 
     @classmethod
-    def from_formula(cls, formula, vc_formulas, data, vcp_p=1, fe_p=2):
+    def from_formula(cls, formula, vc_formulas, data, vcp_p=1,
+            fe_p=2, orthog=False):
 
         fam = families.Binomial()
         x = _BayesMixedGLM.from_formula(
-            formula, vc_formulas, data, family=fam, vcp_p=vcp_p, fe_p=fe_p)
+            formula, vc_formulas, data, family=fam, vcp_p=vcp_p, fe_p=fe_p,
+            orthog=orthog)
 
         # Copy over to the intended class structure
         mod = BinomialBayesMixedGLM(
             x.endog, x.exog, exog_vc=x.exog_vc, ident=x.ident,
             vcp_p=x.vcp_p, fe_p=x.fe_p, fep_names=x.fep_names,
-            vcp_names=x.vcp_names, vc_names=x.vc_names)
+            vcp_names=x.vcp_names, vc_names=x.vc_names,
+            orthog=x.orthog)
         mod.data = x.data
 
         return mod
@@ -893,29 +944,31 @@ class PoissonBayesMixedGLM(_VariationalBayesMixedGLM, _BayesMixedGLM):
     __doc__ = _init_doc.format(example=_poisson_example)
 
     def __init__(self, endog, exog, exog_vc, ident, vcp_p=1,
-                 fe_p=2, fep_names=None, vcp_names=None):
+                 fe_p=2, fep_names=None, vcp_names=None,
+                 orthog=False):
 
         super(PoissonBayesMixedGLM, self).__init__(
             endog=endog, exog=exog, exog_vc=exog_vc,
             ident=ident, vcp_p=vcp_p, fe_p=fe_p,
             family=families.Poisson(),
-            fep_names=fep_names, vcp_names=vcp_names)
+            fep_names=fep_names, vcp_names=vcp_names,
+            orthog=orthog)
 
     @classmethod
     def from_formula(cls, formula, vc_formulas, data, vcp_p=1, fe_p=2,
-                     vcp_names=None, vc_names=None):
+                     vcp_names=None, vc_names=None, orthog=False):
 
         fam = families.Poisson()
         x = _BayesMixedGLM.from_formula(
             formula, vc_formulas, data, family=fam, vcp_p=vcp_p, fe_p=fe_p,
-            vcp_names=vcp_names, vc_names=vc_names)
+            vcp_names=vcp_names, vc_names=vc_names, orthog=orthog)
 
         # Copy over to the intended class structure
         mod = PoissonBayesMixedGLM(
             endog=x.endog, exog=x.exog, exog_vc=x.exog_vc,
             ident=x.ident, vcp_p=x.vcp_p, fe_p=x.fe_p,
             fep_names=x.fep_names, vcp_names=x.vcp_names,
-            vc_names=x.vc_names)
+            vc_names=x.vc_names, orthog=x.orthog)
         mod.data = x.data
 
         return mod
