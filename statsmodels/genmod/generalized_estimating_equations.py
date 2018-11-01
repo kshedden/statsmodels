@@ -682,8 +682,8 @@ class GEE(base.Model):
         if type(weights) == str:
             weights = data[weights]
 
-        model = super(GEE, cls).from_formula(formula, data, subset,
-                                             groups, time=time,
+        model = super(GEE, cls).from_formula(formula, data=data, subset=subset,
+                                             groups=groups, time=time,
                                              offset=offset,
                                              exposure=exposure,
                                              weights=weights,
